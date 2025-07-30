@@ -12,12 +12,15 @@ st.write("\n")
 
 
 # Chargement des données
+@st.cache_data
 def load_data():
     file_path = Path("data") / "plaintes_consommateurs.xlsx"
     return pd.read_excel(file_path, sheet_name="Data")
 
 
 df = load_data()
+st.session_state.df = df
+df = st.session_state.df
 
 # Préparation
 df["Date received"] = pd.to_datetime(df["Date received"], errors="coerce")
@@ -29,10 +32,36 @@ years = sorted(df["Year"].dropna().unique())
 selected_year = st.sidebar.slider(
     "Choisir une année", int(min(years)), int(max(years)), int(max(years))
 )
+# Filtre produit
+product_options = ["Tous"] + sorted(df["Product"].dropna().unique())
+selected_product = st.sidebar.selectbox("Filtrer par produit", product_options)
+
+# Filtre multi-états
+state_options = sorted(df["State"].dropna().unique())
+selected_states = st.sidebar.multiselect("Filtrer par État(s)", state_options)
+
+# Filtre par délai de réponse
+timely_filter = st.sidebar.checkbox(
+    "Afficher uniquement les réponses non traitées dans les délais (No)"
+)
+
 # Filtrage des données global
 filteredglobal_df = len(df)
 # Filtrage des données selon l'année sélectionnée
 filtered_df = df[df["Year"] == selected_year]
+
+# Filtre produit
+if selected_product != "Tous":
+    filtered_df = filtered_df[filtered_df["Product"] == selected_product]
+
+# Filtre multi-états
+if selected_states:
+    filtered_df = filtered_df[filtered_df["State"].isin(selected_states)]
+
+# Filtre délai de réponse
+if timely_filter:
+    filtered_df = filtered_df[filtered_df["Timely response"] == "No"]
+
 
 st.write("\n")
 st.write("\n")
@@ -52,7 +81,7 @@ with col1:
         f"<h6 style='color:#ab0093;'>Nombre total de plaintes </h6>",
         unsafe_allow_html=True,
     )
-    st.metric(label="", value=f"{filteredglobal_df:,}")
+    st.metric(label=" ", value=f"{filteredglobal_df:,}")
 
 with col2:
     # Affichage du nombre total de plaintes global
@@ -61,7 +90,7 @@ with col2:
         unsafe_allow_html=True,
     )
     st.metric(
-        label=f"",
+        label=" ",
         value=f"{filtered_df.shape[0]:,}",
     )
 
@@ -71,7 +100,7 @@ with col3:
     fig1 = px.line(
         x=complaints_by_year.index,
         y=complaints_by_year.values,
-        labels={"x": "", "y": ""},
+        labels={"x": " ", "y": " "},
     )
     fig1.update_layout(
         title={
