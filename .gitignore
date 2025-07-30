@@ -15,3 +15,8 @@ streamlit/secrets.toml
 
 # dossiers
 old/
+notebooks/
+sauvegardes/
+
+main.py
+
