@@ -1,7 +1,7 @@
 import streamlit as st
 import psycopg2
 import pandas as pd
-import numpy as np 
+import numpy as np
 from datetime import datetime, timedelta
 import plotly.express as px
 import pytz
@@ -45,26 +45,71 @@ def format_timedelta(td):
 # --- Barre latérale pour les filtres ---
 st.sidebar.header("Filtres")
 
-today = datetime.now()
-start_date_default = today - timedelta(days=90)
-end_date_default = today
+tz = pytz.timezone("Europe/Paris")
+now_tz = tz.localize(datetime.now()) # Assurez-vous que now_tz est défini et aware
 
-date_range = st.sidebar.date_input(
-    "Sélectionnez la période pour les graphiques :",
-    value=(start_date_default, end_date_default),
-    max_value=today
+# --- Choix du mode de filtre ---
+filter_mode = st.sidebar.radio(
+    "Comment voulez-vous filtrer les dates ?",
+    ("Période prédéfinie", "Plage de dates personnalisée")
 )
 
-if len(date_range) == 2:
-    start_date_filter = datetime.combine(date_range[0], datetime.min.time())
-    end_date_filter = datetime.combine(date_range[1], datetime.max.time())
-else:
-    start_date_filter = datetime.combine(date_range[0], datetime.min.time())
-    end_date_filter = datetime.combine(date_range[0], datetime.max.time())
+# Initialisation des dates de filtre
+start_date_filter = None
+end_date_filter = None
 
-tz = pytz.timezone("Europe/Paris")
-now_tz = tz.localize(datetime.now())
+if filter_mode == "Période prédéfinie":
+    # Options pour le menu déroulant de la période
+    time_options = {
+        "Hier": (now_tz - timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0),
+        "Ces 7 derniers jours": (now_tz - timedelta(days=7)).replace(hour=0, minute=0, second=0, microsecond=0),
+        "Ces 15 derniers jours": (now_tz - timedelta(days=15)).replace(hour=0, minute=0, second=0, microsecond=0),
+        "Ces 30 derniers jours": (now_tz - timedelta(days=30)).replace(hour=0, minute=0, second=0, microsecond=0),
+        "Ces 2 derniers mois": (now_tz - timedelta(days=60)).replace(hour=0, minute=0, second=0, microsecond=0),
+        "Ces 3 derniers mois": (now_tz - timedelta(days=90)).replace(hour=0, minute=0, second=0, microsecond=0),
+        "Ces 6 derniers mois": (now_tz - timedelta(days=180)).replace(hour=0, minute=0, second=0, microsecond=0),
+        "Ces 12 derniers mois": (now_tz - timedelta(days=365)).replace(hour=0, minute=0, second=0, microsecond=0),
+        "Depuis le début": datetime(2000, 1, 1, tzinfo=tz) # Une date très ancienne, ajustez si nécessaire
+    }
 
+    selected_period_label = st.sidebar.selectbox(
+        "Sélectionnez une période prédéfinie :",
+        list(time_options.keys()),
+        index=7 # Sélectionne "Ces 12 derniers mois" par défaut
+    )
+
+    start_date_filter = time_options[selected_period_label]
+    end_date_filter = now_tz.replace(hour=23, minute=59, second=59, microsecond=999999) # Fin de la journée actuelle
+
+    # Cas spécial pour "Hier"
+    if selected_period_label == "Hier":
+        end_date_filter = (now_tz - timedelta(days=1)).replace(hour=23, minute=59, second=59, microsecond=999999)
+
+elif filter_mode == "Plage de dates personnalisée":
+    today_naive = datetime.now().date() # Pour le widget date_input qui est naïf
+    start_date_default_naive = (today_naive - timedelta(days=90))
+    end_date_default_naive = today_naive
+
+    date_range_custom = st.sidebar.date_input(
+        "Sélectionnez la période pour les graphiques :",
+        value=(start_date_default_naive, end_date_default_naive),
+        max_value=today_naive
+    )
+
+    if len(date_range_custom) == 2:
+        start_date_filter = tz.localize(datetime.combine(date_range_custom[0], datetime.min.time()))
+        end_date_filter = tz.localize(datetime.combine(date_range_custom[1], datetime.max.time()))
+    else:
+        # Cas où une seule date est sélectionnée (cela peut arriver si l'utilisateur en retire une)
+        start_date_filter = tz.localize(datetime.combine(date_range_custom[0], datetime.min.time()))
+        end_date_filter = tz.localize(datetime.combine(date_range_custom[0], datetime.max.time()))
+
+# Fallback si, pour une raison improbable, les dates ne sont pas définies
+if start_date_filter is None or end_date_filter is None:
+    start_date_filter = datetime(2000, 1, 1, tzinfo=tz)
+    end_date_filter = now_tz.replace(hour=23, minute=59, second=59, microsecond=999999)
+
+# Affichage de la période sélectionnée (pour confirmation)
 mois_fr = {
     1: "janvier", 2: "février", 3: "mars", 4: "avril", 5: "mai", 6: "juin",
     7: "juillet", 8: "août", 9: "septembre", 10: "octobre", 11: "novembre", 12: "décembre"
@@ -72,6 +117,7 @@ mois_fr = {
 
 start_date_str = f"{start_date_filter.day} {mois_fr[start_date_filter.month]} {start_date_filter.year}"
 end_date_str = f"{end_date_filter.day} {mois_fr[end_date_filter.month]} {end_date_filter.year}"
+
 
 # --- Titre du Dashboard et CSS ---
 st.title("📊 Dashboard des Avis Nickel")
@@ -125,7 +171,7 @@ pcolkpi, gcolkpi = st.columns([1, 2])
 with st.container():
 
     with pcolkpi:
-        
+
         with st.container(border=True):
             st.header("Indicateurs Clés de Performance")
             st.write(f"**Période sélectionnée :** entre le {start_date_str} et le {end_date_str}")
@@ -176,7 +222,7 @@ with st.container():
             colkpi2.metric("Note moyenne", f"{note_moyenne_periode:.2f}/5")
 
     with gcolkpi:
-            
+
         # Logique de granularité pour les graphiques d'évolution
         delta_jours = (end_date_filter - start_date_filter).days
 
@@ -216,21 +262,18 @@ with st.container():
             else:
                 df_evolution['x_axis_data_label'] = df_evolution['x_axis_data'].astype(str)
 
-            # *** C'EST LA NOUVELLE LIGNE CLÉ À AJOUTER ***
             df_evolution = df_evolution.reset_index(drop=True)
-            # *** FIN DE LA NOUVELLE LIGNE CLÉ ***
+
 
         # --- Graphique Combiné ---
         st.subheader("Évolution Combinée : Nombre d'avis et Note moyenne")
 
         if not df_evolution.empty:
-            # Assurer que nombre_avis est bien numérique et entier
             df_evolution['nombre_avis'] = pd.to_numeric(df_evolution['nombre_avis'], errors='coerce').astype('int64')
             df_evolution.dropna(subset=['nombre_avis'], inplace=True)
 
             fig_combined = make_subplots(specs=[[{"secondary_y": True}]])
 
-            # Convertir en listes pures au cas où (dernière tentative de ce côté)
             x_labels_list = df_evolution['x_axis_data_label'].tolist()
             nombre_avis_list = df_evolution['nombre_avis'].tolist()
             note_moyenne_list = df_evolution['note_moyenne'].tolist()
@@ -285,20 +328,21 @@ with st.container():
 
 st.divider()
 
-################################################################
-################################################################
+
+#################################################################
+#################################################################
 
 # --- Section: Suivi des avis sur invitation ---
 gcol_asi, pcol_asi = st.columns([2, 1])
 
 with pcol_asi:
-    
+
     with st.container(border=True):
         st.header("Suivi des avis sur invitation")
         st.markdown("Cette section analyse spécifiquement les avis reçus suite à une invitation.")
         # 4 colonnes pour les KPIs d'invitation
         pcol_asi1, pcol_asi2 = st.columns(2)
-        
+
         # KPI 1: Nombre d'avis sur invitation reçus
         query_kpi_invit_count = f"""
         SELECT COUNT(id)
@@ -335,11 +379,8 @@ with pcol_asi:
             pourcentage_avis_invitation = (df_pourcentage_invitation.iloc[0]['count_invited'] / df_pourcentage_invitation.iloc[0]['total_reviews']) * 100
         pcol_asi1.metric("% Avis sur invitation", f"{pourcentage_avis_invitation:.1f}%")
 
-        
-        # NOUVEAU KPI 4: Différence de note (avis avec invitation vs sans invitation) et son delta
 
-        # Récupération de la note moyenne des avis sur invitation (déjà calculée plus haut)
-        # note_moyenne_invit est déjà disponible depuis col_invit_kpi2
+        # NOUVEAU KPI 4: Différence de note (avis avec invitation vs sans invitation) et son delta
 
         # Récupération de la note moyenne des avis sans invitation
         query_note_moyenne_sans_invitation = f"""
@@ -351,17 +392,6 @@ with pcol_asi:
         df_note_sans_invitation = run_query(query_note_moyenne_sans_invitation)
         note_moyenne_sans_invitation_kpi = df_note_sans_invitation.iloc[0, 0] if not df_note_sans_invitation.empty and df_note_sans_invitation.iloc[0, 0] is not None else np.nan
 
-        # Note moyenne globale (déjà calculée au début dans 'note_moyenne_periode')
-        # Cette variable doit être accessible ici. Si elle ne l'est pas, décommentez le bloc ci-dessous:
-        # query_kpi_note_periode = f"""
-        # SELECT AVG(note_avis)
-        # FROM reviews_nickel
-        # WHERE date_publication >= '{start_date_filter.isoformat()}' AND date_publication <= '{end_date_filter.isoformat()}';
-        # """
-        # df_note_periode = run_query(query_kpi_note_periode)
-        # note_moyenne_periode = df_note_periode.iloc[0, 0] if not df_note_periode.empty and df_note_periode.iloc[0, 0] is not None else np.nan
-
-
         # Calcul de la VALEUR PRINCIPALE du KPI : (Note avec invitation) - (Note sans invitation)
         valeur_principale_diff_invit_vs_sans_invit = np.nan
         valeur_principale_str = "N/A"
@@ -369,31 +399,9 @@ with pcol_asi:
             valeur_principale_diff_invit_vs_sans_invit = note_moyenne_invit - note_moyenne_sans_invitation_kpi
             valeur_principale_str = f"{valeur_principale_diff_invit_vs_sans_invit:+.2f}"
 
-        # # Calcul du DELTA : (Note globale) - (Note sans invitation)
-        # # Le but du delta est de savoir combien les invitations nous font gagner de points.
-        # # C'est la différence entre la note "naturelle" (sans invitation) et la note "boostée" (globale).
-        # delta_gain_invitations = np.nan
-        # delta_str = "(N/A)"
-        # delta_color = "off" # Default to neutral
-
-        # if not pd.isna(note_moyenne_periode) and not pd.isna(note_moyenne_sans_invitation_kpi):
-        #     delta_gain_invitations = note_moyenne_periode - note_moyenne_sans_invitation_kpi
-        #     delta_str = f"{delta_gain_invitations:+.2f}"
-
-        #     # Définir la couleur du delta
-        #     # Un delta positif signifie que les invitations ont "gagné" des points par rapport à la note naturelle (sans invitation)
-        #     if delta_gain_invitations > 0.05:
-        #         delta_color = "inverse" # Vert (c'est un gain, donc positif)
-        #     elif delta_gain_invitations < -0.05:
-        #         delta_color = "off" # Rouge (si, étonnamment, les invitations faisaient baisser la note globale)
-        #     else:
-        #         delta_color = "off" # Neutre (gris) si la différence est minime
-
         pcol_asi1.metric(
             "Diff. Note (Invit. vs Sans Invit.)", # Titre du KPI
             valeur_principale_str, # Affiche la différence entre invit et sans invit
-        #    delta=delta_str, # Affiche le gain/perte des invitations
-        #    delta_color=delta_color
         )
 
     # GRAPHIQUE COMBINÉ : Évolution du nombre d'avis sur invitation et de la note moyenne
@@ -500,6 +508,3 @@ with st.container(border=True):
         st.dataframe(styled_df_negative, use_container_width=True)
     else:
         st.info("Aucun avis négatif trouvé pour la période sélectionnée.")
-
-    st.markdown("---")
-    st.caption("Données mises à jour toutes les 10 minutes.")
