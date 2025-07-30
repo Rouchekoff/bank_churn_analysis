@@ -12,3 +12,6 @@ requirements_old.txt
 
 # identifiants bdd neon
 streamlit/secrets.toml
+
+# dossiers
+old/

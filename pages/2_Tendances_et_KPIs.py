@@ -1,505 +1,365 @@
 import streamlit as st
+import psycopg2
 import pandas as pd
-import numpy as np
+from datetime import datetime, timedelta
 import plotly.express as px
+import pytz
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
-import seaborn as sns
-from datetime import datetime, timedelta
-from sklearn.linear_model import LinearRegression
-from sklearn.preprocessing import StandardScaler
-import warnings
 
-warnings.filterwarnings("ignore")
+# --- Configuration de la page Streamlit ---
+st.set_page_config(
+    page_title="Dashboard Avis Nickel",
+    page_icon="📊",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
 
-# Configuration de la page
-st.set_page_config(page_title="Tendances et KPIs", page_icon="📈", layout="wide")
+# --- Configuration de la connexion à la base de données Neon ---
+@st.cache_resource
+def init_connection():
+    db_config = st.secrets["connections"]["postgresql"]
+    return psycopg2.connect(**db_config)
 
-# CSS personnalisé
+conn = init_connection()
+
+# --- Fonction pour charger les données (avec mise en cache) ---
+@st.cache_data(ttl=600)
+def run_query(query):
+    with conn.cursor() as cur:
+        cur.execute(query)
+        rows = cur.fetchall()
+        colnames = [desc[0] for desc in cur.description]
+        return pd.DataFrame(rows, columns=colnames)
+
+# --- Fonctions utilitaires pour les calculs ---
+def format_timedelta(td):
+    if pd.isna(td):
+        return "N/A"
+    total_seconds = int(td.total_seconds())
+    hours, remainder = divmod(total_seconds, 3600)
+    minutes, _ = divmod(remainder, 60)
+    return f"{hours:02}:{minutes:02}"
+
+# --- Barre latérale pour les filtres ---
+st.sidebar.header("Filtres")
+
+today = datetime.now()
+start_date_default = today - timedelta(days=90)
+end_date_default = today
+
+date_range = st.sidebar.date_input(
+    "Sélectionnez la période pour les graphiques :",
+    value=(start_date_default, end_date_default),
+    max_value=today
+)
+
+if len(date_range) == 2:
+    start_date_filter = datetime.combine(date_range[0], datetime.min.time())
+    end_date_filter = datetime.combine(date_range[1], datetime.max.time())
+else:
+    start_date_filter = datetime.combine(date_range[0], datetime.min.time())
+    end_date_filter = datetime.combine(date_range[0], datetime.max.time())
+
+tz = pytz.timezone("Europe/Paris")
+now_tz = tz.localize(datetime.now())
+
+mois_fr = {
+    1: "janvier", 2: "février", 3: "mars", 4: "avril", 5: "mai", 6: "juin",
+    7: "juillet", 8: "août", 9: "septembre", 10: "octobre", 11: "novembre", 12: "décembre"
+}
+
+start_date_str = f"{start_date_filter.day} {mois_fr[start_date_filter.month]} {start_date_filter.year}"
+end_date_str = f"{end_date_filter.day} {mois_fr[end_date_filter.month]} {end_date_filter.year}"
+
+# --- Titre du Dashboard et CSS ---
+st.title("📊 Dashboard des Avis Nickel")
+st.markdown("Ce tableau de bord présente une analyse des avis clients collectés pour Nickel.")
+
 st.markdown(
     """
 <style>
-    .trend-up { color: #2e7d32; font-weight: bold; }
-    .trend-down { color: #d32f2f; font-weight: bold; }
-    .trend-stable { color: #f57c00; font-weight: bold; }
-    .kpi-card {
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        color: white;
-        padding: 1.5rem;
-        border-radius: 15px;
-        margin: 0.5rem;
-        box-shadow: 0 4px 6px rgba(0,0,0,0.1);
-    }
-    .metric-evolution {
-        font-size: 1.2rem;
-        font-weight: bold;
+    .main-header {
+        font-size: 2.5rem;
+        font-weight: 700;
+        color: #1f4e79;
         text-align: center;
+        margin-bottom: 2rem;
+        padding: 1rem;
+        background: linear-gradient(90deg, #f0f8ff, #e6f3ff);
+        border-radius: 10px;
+        border-left: 5px solid #1f4e79;
     }
+
+    .metric-card {
+        background: white;
+        padding: 1.5rem;
+        border-radius: 10px;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        border-left: 4px solid #1f4e79;
+    }
+
+    .kpi-container-background {
+        background-color: #262730;
+        border-radius: 10px;
+        padding: 20px;
+        margin-bottom: 2rem;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+
+    .kpi-positive { color: #2e7d32; font-weight: bold; }
+    .kpi-negative { color: #d32f2f; font-weight: bold; }
+    .kpi-neutral { color: #f57c00; font-weight: bold; }
 </style>
 """,
     unsafe_allow_html=True,
 )
 
-
-@st.cache_data
-def load_data():
-    """Charge les données"""
-    try:
-        avis_df = pd.read_csv("avis_titan_complet.csv")
-        avis_df.columns = avis_df.columns.str.strip()
-
-        if "date" in avis_df.columns:
-            avis_df["date"] = pd.to_datetime(avis_df["date"], errors="coerce")
-
-        return avis_df
-    except Exception as e:
-        st.error(f"Erreur de chargement: {str(e)}")
-        return None
-
-
-def calculate_trends(avis_df, period="M"):
-    """Calcule les tendances temporelles"""
-    if "date" not in avis_df.columns:
-        return None
-
-    # Grouper par période
-    avis_df["period"] = avis_df["date"].dt.to_period(period)
-
-    # Métriques par période
-    trends = (
-        avis_df.groupby("period")
-        .agg(
-            {
-                "sentiment": lambda x: (
-                    (x == "positif").sum() if "sentiment" in avis_df.columns else 0
-                ),
-                "note": "mean" if "note" in avis_df.columns else lambda x: 0,
-            }
-        )
-        .reset_index()
-    )
-
-    trends["period"] = trends["period"].astype(str)
-    trends["total_avis"] = avis_df.groupby("period").size().values
-
-    # Calcul des tendances (régression linéaire)
-    if len(trends) > 1:
-        X = np.arange(len(trends)).reshape(-1, 1)
-
-        # Tendance satisfaction
-        if "note" in avis_df.columns:
-            lr_satisfaction = LinearRegression()
-            lr_satisfaction.fit(X, trends["note"])
-            trends["satisfaction_trend"] = lr_satisfaction.predict(X)
-            satisfaction_slope = lr_satisfaction.coef_[0]
-        else:
-            satisfaction_slope = 0
-
-        # Tendance volume
-        lr_volume = LinearRegression()
-        lr_volume.fit(X, trends["total_avis"])
-        trends["volume_trend"] = lr_volume.predict(X)
-        volume_slope = lr_volume.coef_[0]
-
-        return trends, satisfaction_slope, volume_slope
-
-    return trends, 0, 0
-
-
-def create_kpi_evolution_chart(trends, metric, title):
-    """Crée un graphique d'évolution des KPIs"""
-    if trends is None or metric not in trends.columns:
-        return None
-
-    fig = go.Figure()
-
-    # Ligne des données réelles
-    fig.add_trace(
-        go.Scatter(
-            x=trends["period"],
-            y=trends[metric],
-            mode="lines+markers",
-            name="Données réelles",
-            line=dict(color="#1f77b4", width=3),
-            marker=dict(size=8),
-        )
-    )
-
-    # Ligne de tendance si disponible
-    trend_col = f"{metric}_trend"
-    if trend_col in trends.columns:
-        fig.add_trace(
-            go.Scatter(
-                x=trends["period"],
-                y=trends[trend_col],
-                mode="lines",
-                name="Tendance",
-                line=dict(color="red", width=2, dash="dash"),
-            )
-        )
-
-    fig.update_layout(
-        title=title,
-        xaxis_title="Période",
-        yaxis_title=metric.capitalize(),
-        hovermode="x unified",
-        height=400,
-    )
-
-    return fig
-
-
-def calculate_performance_metrics(avis_df):
-    """Calcule les métriques de performance"""
-    metrics = {}
-
-    if "date" in avis_df.columns:
-        # Métriques temporelles
-        current_month = avis_df["date"].dt.to_period("M").max()
-        previous_month = current_month - 1
-
-        current_data = avis_df[avis_df["date"].dt.to_period("M") == current_month]
-        previous_data = avis_df[avis_df["date"].dt.to_period("M") == previous_month]
-
-        # Volume d'avis
-        metrics["volume_current"] = len(current_data)
-        metrics["volume_previous"] = len(previous_data)
-        metrics["volume_change"] = (
-            (metrics["volume_current"] - metrics["volume_previous"])
-            / max(metrics["volume_previous"], 1)
-        ) * 100
-
-        # Score moyen
-        if "note" in avis_df.columns:
-            metrics["score_current"] = current_data["note"].mean()
-            metrics["score_previous"] = previous_data["note"].mean()
-            metrics["score_change"] = (
-                metrics["score_current"] - metrics["score_previous"]
-            )
-
-        # Sentiments
-        if "sentiment" in avis_df.columns:
-            current_positive = (current_data["sentiment"] == "positif").sum()
-            previous_positive = (previous_data["sentiment"] == "positif").sum()
-
-            metrics["positive_rate_current"] = (
-                current_positive / max(len(current_data), 1)
-            ) * 100
-            metrics["positive_rate_previous"] = (
-                previous_positive / max(len(previous_data), 1)
-            ) * 100
-            metrics["positive_rate_change"] = (
-                metrics["positive_rate_current"] - metrics["positive_rate_previous"]
-            )
-
-    return metrics
-
-
-def create_satisfaction_heatmap(avis_df):
-    """Crée une heatmap de satisfaction par jour et heure"""
-    if "date" not in avis_df.columns or "note" not in avis_df.columns:
-        return None
-
-    # Extraire jour de la semaine et heure
-    avis_df["day_of_week"] = avis_df["date"].dt.day_name()
-    avis_df["hour"] = avis_df["date"].dt.hour
-
-    # Calculer la satisfaction moyenne
-    heatmap_data = avis_df.pivot_table(
-        index="day_of_week", columns="hour", values="note", aggfunc="mean"
-    )
-
-    # Réorganiser les jours
-    day_order = [
-        "Monday",
-        "Tuesday",
-        "Wednesday",
-        "Thursday",
-        "Friday",
-        "Saturday",
-        "Sunday",
-    ]
-    heatmap_data = heatmap_data.reindex(day_order)
-
-    fig = px.imshow(
-        heatmap_data,
-        title="Satisfaction Moyenne par Jour et Heure",
-        labels=dict(x="Heure", y="Jour", color="Note moyenne"),
-        color_continuous_scale="RdYlGn",
-        aspect="auto",
-    )
-
-    return fig
-
-
-def create_trend_forecast(avis_df):
-    """Crée une prévision de tendance"""
-    if "date" not in avis_df.columns:
-        return None
-
-    # Données mensuelles
-    monthly_data = avis_df.groupby(avis_df["date"].dt.to_period("M")).size()
-
-    # Préparer les données pour la prévision
-    X = np.arange(len(monthly_data)).reshape(-1, 1)
-    y = monthly_data.values
-
-    # Modèle de régression
-    model = LinearRegression()
-    model.fit(X, y)
-
-    # Prévision pour les 6 prochains mois
-    future_X = np.arange(len(monthly_data), len(monthly_data) + 6).reshape(-1, 1)
-    forecast = model.predict(future_X)
-
-    # Créer les dates futures
-    last_date = monthly_data.index[-1]
-    future_dates = [last_date + i for i in range(1, 7)]
-
-    fig = go.Figure()
-
-    # Données historiques
-    fig.add_trace(
-        go.Scatter(
-            x=[str(d) for d in monthly_data.index],
-            y=monthly_data.values,
-            mode="lines+markers",
-            name="Données historiques",
-            line=dict(color="blue", width=3),
-        )
-    )
-
-    # Prévision
-    fig.add_trace(
-        go.Scatter(
-            x=[str(d) for d in future_dates],
-            y=forecast,
-            mode="lines+markers",
-            name="Prévision",
-            line=dict(color="red", width=2, dash="dash"),
-        )
-    )
-
-    fig.update_layout(
-        title="Prévision du Volume d'Avis",
-        xaxis_title="Mois",
-        yaxis_title="Nombre d'avis",
-        hovermode="x unified",
-        height=500,
-    )
-
-    return fig
-
-
-def main():
-    st.title("📈 Tendances et KPIs Temporels")
-
-    # Chargement des données
-    with st.spinner("Chargement des données..."):
-        avis_df = load_data()
-
-    if avis_df is None:
-        st.error("Impossible de charger les données")
-        return
-
-    # Sidebar avec contrôles
-    st.sidebar.header("⚙️ Paramètres")
-
-    # Sélection de la période d'analyse
-    period_options = {"Mensuel": "M", "Hebdomadaire": "W", "Quotidien": "D"}
-
-    selected_period = st.sidebar.selectbox(
-        "Période d'analyse", options=list(period_options.keys()), index=0
-    )
-
-    period_code = period_options[selected_period]
-
-    # Calcul des tendances
-    trends_data = calculate_trends(avis_df, period_code)
-    if (
-        trends_data is not None and trends_data[0] is not None
-    ):  # modified condition to check if trends_data is not None
-        trends, satisfaction_slope, volume_slope = trends_data
-    else:
-        trends, satisfaction_slope, volume_slope = None, 0, 0
-
-    # Métriques de performance
-    performance_metrics = calculate_performance_metrics(avis_df)
-
-    # Affichage des KPIs principaux
-    st.header("🎯 KPIs de Performance")
+with st.container():
+    st.markdown('<div class="kpi-container-background">', unsafe_allow_html=True)
+    st.header("Indicateurs Clés de Performance")
+    st.write(f"**Période sélectionnée :** entre le {start_date_str} et le {end_date_str}")
 
     col1, col2, col3, col4 = st.columns(4)
 
-    with col1:
-        if "volume_current" in performance_metrics:
-            volume_delta = performance_metrics.get("volume_change", 0)
-            st.metric(
-                "Volume Avis (Mois)",
-                f"{performance_metrics['volume_current']:,}",
-                f"{volume_delta:+.1f}%",
-            )
+    query_kpi_avis_periode = f"""
+    SELECT COUNT(id)
+    FROM reviews_nickel
+    WHERE date_publication >= '{start_date_filter.isoformat()}' AND date_publication <= '{end_date_filter.isoformat()}';
+    """
+    df_avis_periode = run_query(query_kpi_avis_periode)
+    nombre_avis_periode = df_avis_periode.iloc[0, 0] if not df_avis_periode.empty else 0
+    col1.metric("Nombre d'avis reçus", nombre_avis_periode)
 
-    with col2:
-        if "score_current" in performance_metrics:
-            score_delta = performance_metrics.get("score_change", 0)
-            st.metric(
-                "Score Moyen",
-                f"{performance_metrics['score_current']:.2f}/5",
-                f"{score_delta:+.2f}",
-            )
+    query_kpi_reponse = f"""
+    SELECT
+        COUNT(CASE WHEN reponse = TRUE THEN 1 END) AS count_responded,
+        COUNT(id) AS total_reviews
+    FROM reviews_nickel
+    WHERE date_publication >= '{start_date_filter.isoformat()}' AND date_publication <= '{end_date_filter.isoformat()}';
+    """
+    df_reponse = run_query(query_kpi_reponse)
+    pourcentage_reponse = 0
+    if not df_reponse.empty and df_reponse.iloc[0]['total_reviews'] > 0:
+        pourcentage_reponse = (df_reponse.iloc[0]['count_responded'] / df_reponse.iloc[0]['total_reviews']) * 100
+    col2.metric("% Avis répondus", f"{pourcentage_reponse:.1f}%")
 
-    with col3:
-        if "positive_rate_current" in performance_metrics:
-            positive_delta = performance_metrics.get("positive_rate_change", 0)
-            st.metric(
-                "Taux Positif",
-                f"{performance_metrics['positive_rate_current']:.1f}%",
-                f"{positive_delta:+.1f}%",
-            )
+    query_kpi_temps_reponse = f"""
+    SELECT AVG(EXTRACT(EPOCH FROM (date_reponse - date_publication))) AS avg_response_seconds
+    FROM reviews_nickel
+    WHERE reponse = TRUE
+    AND date_publication >= '{start_date_filter.isoformat()}' AND date_publication <= '{end_date_filter.isoformat()}'
+    AND date_reponse > date_publication;
+    """
+    df_temps_reponse = run_query(query_kpi_temps_reponse)
+    temps_moyen_secondes = df_temps_reponse.iloc[0, 0] if not df_temps_reponse.empty and df_temps_reponse.iloc[0, 0] is not None else 0
+    temps_moyen_td = timedelta(seconds=float(temps_moyen_secondes))
+    col3.metric("Temps de réponse moyen", format_timedelta(temps_moyen_td))
 
-    with col4:
-        # Indicateur de tendance globale
-        if satisfaction_slope > 0.01:
-            trend_status = "🟢 Amélioration"
-        elif satisfaction_slope < -0.01:
-            trend_status = "🔴 Dégradation"
-        else:
-            trend_status = "🟡 Stable"
+    query_kpi_note_periode = f"""
+    SELECT AVG(note_avis)
+    FROM reviews_nickel
+    WHERE date_publication >= '{start_date_filter.isoformat()}' AND date_publication <= '{end_date_filter.isoformat()}';
+    """
+    df_note_periode = run_query(query_kpi_note_periode)
+    note_moyenne_periode = df_note_periode.iloc[0, 0] if not df_note_periode.empty and df_note_periode.iloc[0, 0] is not None else 0
+    col4.metric("Note moyenne", f"{note_moyenne_periode:.2f}/5")
 
-        st.metric("Tendance Globale", trend_status, f"Pente: {satisfaction_slope:.3f}")
+    st.markdown('</div>', unsafe_allow_html=True)
 
-    # Graphiques d'évolution
-    st.header("📊 Évolution Temporelle")
+########################################################################
+# Logique de granularité pour les graphiques d'évolution
+delta_jours = (end_date_filter - start_date_filter).days
 
-    if trends is not None:
-        col1, col2 = st.columns(2)
+if delta_jours < 14:
+    date_trunc_unit = 'day'
+    x_axis_label = 'Date'
+else:
+    date_trunc_unit = 'week'
+    x_axis_label = 'Semaine'
 
-        with col1:
-            # Évolution du volume
-            volume_chart = create_kpi_evolution_chart(
-                trends, "total_avis", "Évolution du Volume d'Avis"
-            )
-            if volume_chart:
-                st.plotly_chart(volume_chart, use_container_width=True)
+query_evolution = f"""
+SELECT
+    DATE_TRUNC('{date_trunc_unit}', date_publication) AS periode,
+    AVG(note_avis) AS note_moyenne,
+    COUNT(id) AS nombre_avis,
+    COUNT(CASE WHEN avis_sur_invitation = TRUE THEN 1 END) AS avis_invitation_count,
+    COUNT(id) AS total_avis_periode,
+    AVG(CASE WHEN avis_sur_invitation = TRUE THEN note_avis END) AS note_moyenne_invitation,
+    COUNT(CASE WHEN avis_sur_invitation = TRUE THEN id END) AS nombre_avis_invitation_periode
+FROM reviews_nickel
+WHERE date_publication >= '{start_date_filter.isoformat()}' AND date_publication <= '{end_date_filter.isoformat()}'
+GROUP BY periode
+ORDER BY periode;
+"""
+df_evolution = run_query(query_evolution)
 
-        with col2:
-            # Évolution de la satisfaction
-            if "note" in avis_df.columns:
-                satisfaction_chart = create_kpi_evolution_chart(
-                    trends, "note", "Évolution de la Satisfaction"
-                )
-                if satisfaction_chart:
-                    st.plotly_chart(satisfaction_chart, use_container_width=True)
+if not df_evolution.empty:
+    df_evolution = df_evolution.rename(columns={'periode': 'x_axis_data'})
+    df_evolution['pourcentage_invitation'] = (df_evolution['avis_invitation_count'] / df_evolution['total_avis_periode']) * 100
+    df_evolution = df_evolution.sort_values('x_axis_data')
+    df_evolution['x_axis_data'] = pd.to_datetime(df_evolution['x_axis_data']).dt.date
 
-    # Heatmap de satisfaction
-    st.header("🔥 Analyse par Jour et Heure")
-
-    heatmap_fig = create_satisfaction_heatmap(avis_df)
-    if heatmap_fig:
-        st.plotly_chart(heatmap_fig, use_container_width=True)
-
-    # Prévision
-    st.header("🔮 Prévision")
-
-    forecast_fig = create_trend_forecast(avis_df)
-    if forecast_fig:
-        st.plotly_chart(forecast_fig, use_container_width=True)
-
-    # Analyse comparative
-    st.header("📋 Analyse Comparative")
-
-    if "date" in avis_df.columns:
-        # Comparaison par mois
-        monthly_comparison = (
-            avis_df.groupby(avis_df["date"].dt.to_period("M"))
-            .agg(
-                {
-                    "note": "mean" if "note" in avis_df.columns else lambda x: 0,
-                    "sentiment": lambda x: (
-                        (x == "positif").sum() if "sentiment" in avis_df.columns else 0
-                    ),
-                }
-            )
-            .reset_index()
+    if date_trunc_unit == 'week':
+        df_evolution['x_axis_data_label'] = df_evolution['x_axis_data'].apply(
+            lambda d: f"Semaine {d.isocalendar()[1]} ({d.year})"
         )
+    else:
+        df_evolution['x_axis_data_label'] = df_evolution['x_axis_data'].astype(str)
 
-        monthly_comparison["period"] = monthly_comparison["date"].astype(str)
-        monthly_comparison["total_avis"] = (
-            avis_df.groupby(avis_df["date"].dt.to_period("M")).size().values
-        )
+    # *** C'EST LA NOUVELLE LIGNE CLÉ À AJOUTER ***
+    df_evolution = df_evolution.reset_index(drop=True)
+    # *** FIN DE LA NOUVELLE LIGNE CLÉ ***
 
-        if "sentiment" in avis_df.columns:
-            monthly_comparison["positive_rate"] = (
-                monthly_comparison["sentiment"] / monthly_comparison["total_avis"] * 100
-            )
+# --- Graphique Combiné ---
+st.subheader("Évolution Combinée : Nombre d'avis et Note moyenne")
 
-        # Tableau comparatif
-        st.subheader("Comparaison Mensuelle")
+if not df_evolution.empty:
+    # Assurer que nombre_avis est bien numérique et entier
+    df_evolution['nombre_avis'] = pd.to_numeric(df_evolution['nombre_avis'], errors='coerce').astype('int64')
+    df_evolution.dropna(subset=['nombre_avis'], inplace=True)
 
-        display_columns = ["period", "total_avis"]
-        if "note" in avis_df.columns:
-            display_columns.append("note")
-        if "positive_rate" in monthly_comparison.columns:
-            display_columns.append("positive_rate")
+    fig_combined = make_subplots(specs=[[{"secondary_y": True}]])
 
-        comparison_df = monthly_comparison[display_columns].tail(12)
-
-        # Renommer les colonnes pour l'affichage
-        column_names = {
-            "period": "Période",
-            "total_avis": "Nombre d'avis",
-            "note": "Note moyenne",
-            "positive_rate": "Taux positif (%)",
-        }
-
-        comparison_df = comparison_df.rename(columns=column_names)
-
-        st.dataframe(comparison_df, use_container_width=True)
-
-    # Insights et recommandations
-    st.header("💡 Insights et Recommandations")
-
-    insights = []
-
-    # Analyse des tendances
-    if satisfaction_slope > 0.01:
-        insights.append(
-            "✅ **Tendance positive** : La satisfaction client s'améliore progressivement"
-        )
-    elif satisfaction_slope < -0.01:
-        insights.append(
-            "⚠️ **Tendance négative** : La satisfaction client se dégrade, action requise"
-        )
-
-    if volume_slope > 0:
-        insights.append(
-            "📈 **Volume croissant** : Le nombre d'avis augmente, signe d'engagement"
-        )
-    elif volume_slope < 0:
-        insights.append(
-            "📉 **Volume décroissant** : Baisse du nombre d'avis, vérifier l'engagement"
-        )
-
-    # Recommandations basées sur les métriques
-    if "positive_rate_current" in performance_metrics:
-        if performance_metrics["positive_rate_current"] < 50:
-            insights.append(
-                "🔴 **Action urgente** : Taux de satisfaction critique (<50%)"
-            )
-        elif performance_metrics["positive_rate_current"] < 70:
-            insights.append(
-                "🟡 **Amélioration nécessaire** : Taux de satisfaction modéré"
-            )
-        else:
-            insights.append("🟢 **Performance solide** : Bon taux de satisfaction")
-
-    for insight in insights:
-        st.markdown(insight)
-
-    if not insights:
-        st.info("Aucun insight particulier détecté. Continuez le monitoring régulier.")
+    # Convertir en listes pures au cas où (dernière tentative de ce côté)
+    x_labels_list = df_evolution['x_axis_data_label'].tolist()
+    nombre_avis_list = df_evolution['nombre_avis'].tolist()
+    note_moyenne_list = df_evolution['note_moyenne'].tolist()
 
 
-if __name__ == "__main__":
-    main()
+    # Ajout du Nombre d'avis en barres (axe Y1)
+    fig_combined.add_trace(go.Bar(
+        x=x_labels_list,
+        y=nombre_avis_list,
+        name='Nombre d\'avis',
+        marker_color='#5B9BD5',
+        orientation='v',
+        yaxis='y'
+    ), secondary_y=False)
+
+    # Ajout de la Note moyenne en ligne (axe Y2)
+    fig_combined.add_trace(go.Scatter(
+        x=x_labels_list,
+        y=note_moyenne_list,
+        mode='lines+markers',
+        name='Note moyenne',
+        line=dict(color='#ED7D31', width=3),
+        marker=dict(symbol='circle', size=8, color='#ED7D31'),
+        yaxis='y2'
+    ), secondary_y=True)
+
+    # Configuration des axes et du layout
+    fig_combined.update_layout(
+        xaxis=dict(type='category', title=x_axis_label),
+        yaxis=dict(
+            title='Nombre d\'avis',
+            title_font=dict(color='#5B9BD5'),
+            tickfont=dict(color='#5B9BD5'),
+            range=[0, df_evolution['nombre_avis'].max() * 1.1]
+        ),
+        yaxis2=dict(
+            title='Note moyenne',
+            title_font=dict(color='#ED7D31'),
+            tickfont=dict(color='#ED7D31'),
+            range=[1, 5]
+        ),
+        legend=dict(x=0.01, y=0.99, bgcolor='rgba(255,255,255,0)', bordercolor='rgba(255,255,255,0)'),
+        margin=dict(l=0, r=0, t=30, b=0),
+        hovermode="x unified",
+        height=450
+    )
+
+
+    st.plotly_chart(fig_combined, use_container_width=True)
+
+else:
+    st.info("Pas de données disponibles pour l'évolution combinée sur la période sélectionnée.")
+
+################################################################
+
+# --- Section des Graphiques d'Évolution (restent inchangés) ---
+st.header("Évolution des indicateurs")
+
+# --- Section: Suivi des avis sur invitation (reste inchangée) ---
+st.header("Suivi des avis sur invitation")
+with st.container(border=True):
+    st.markdown("Cette section analyse spécifiquement les avis reçus suite à une invitation.")
+
+    col_invit_kpi1, col_invit_kpi2 = st.columns(2)
+
+    query_kpi_invit_count = f"""
+    SELECT COUNT(id)
+    FROM reviews_nickel
+    WHERE avis_sur_invitation = TRUE
+      AND date_publication >= '{start_date_filter.isoformat()}' AND date_publication <= '{end_date_filter.isoformat()}';
+    """
+    df_invit_count = run_query(query_kpi_invit_count)
+    nombre_avis_invit = df_invit_count.iloc[0, 0] if not df_invit_count.empty else 0
+    col_invit_kpi1.metric("Avis sur invitation reçus", nombre_avis_invit)
+
+    query_kpi_invit_note = f"""
+    SELECT AVG(note_avis)
+    FROM reviews_nickel
+    WHERE avis_sur_invitation = TRUE
+      AND date_publication >= '{start_date_filter.isoformat()}' AND date_publication <= '{end_date_filter.isoformat()}';
+    """
+    df_invit_note = run_query(query_kpi_invit_note)
+    note_moyenne_invit = df_invit_note.iloc[0, 0] if not df_invit_note.empty and df_invit_note.iloc[0, 0] is not None else 0
+    col_invit_kpi2.metric("Note moyenne avis sur invitation", f"{note_moyenne_invit:.2f}/5")
+
+    st.subheader("Évolution du nombre d'avis sur invitation")
+    if not df_evolution.empty:
+        fig_invit_count_evol = px.line(df_evolution, x='x_axis_data_label', y='nombre_avis_invitation_periode',
+                                       labels={'x_axis_data_label': x_axis_label, 'nombre_avis_invitation_periode': 'Nombre d\'Avis sur Invitation'})
+        fig_invit_count_evol.update_traces(mode='lines+markers')
+        fig_invit_count_evol.update_layout(xaxis_title=x_axis_label, yaxis_title="Nombre d'Avis sur Invitation")
+        st.plotly_chart(fig_invit_count_evol, use_container_width=True)
+    else:
+        st.info("Pas de données disponibles pour l'évolution du nombre d'avis sur invitation sur la période sélectionnée.")
+
+    st.subheader("Évolution de la note moyenne des avis sur invitation")
+    if not df_evolution.empty:
+        fig_invit_note_evol = px.line(df_evolution, x='x_axis_data_label', y='note_moyenne_invitation',
+                                      labels={'x_axis_data_label': x_axis_label, 'note_moyenne_invitation': 'Note Moyenne (Invitation)'})
+        fig_invit_note_evol.update_traces(mode='lines+markers')
+        fig_invit_note_evol.update_layout(xaxis_title=x_axis_label, yaxis_title="Note Moyenne (Invitation)")
+        st.plotly_chart(fig_invit_note_evol, use_container_width=True)
+    else:
+        st.info("Pas de données disponibles pour l'évolution de la note moyenne des avis sur invitation sur la période sélectionnée.")
+
+# --- Section: Étude des avis négatifs (reste inchangée) ---
+st.header("Étude des avis négatifs")
+with st.container(border=True):
+    st.markdown("Cette section présente les avis avec une note de 1 ou 2, considérés comme négatifs.")
+
+    query_negative_reviews = f"""
+    SELECT
+        note_avis,
+        contenu_avis,
+        date_publication,
+        reponse
+    FROM reviews_nickel
+    WHERE note_avis <= 2
+      AND date_publication >= '{start_date_filter.isoformat()}' AND date_publication <= '{end_date_filter.isoformat()}'
+    ORDER BY date_publication DESC;
+    """
+    df_negative_reviews = run_query(query_negative_reviews)
+
+    if not df_negative_reviews.empty:
+        df_negative_reviews['reponse_texte'] = df_negative_reviews['reponse'].apply(lambda x: 'Oui' if x else 'Non')
+
+        def style_response(val):
+            color = 'green' if val == 'Oui' else 'red'
+            return f'color: {color}; font-weight: bold;'
+
+        df_display = df_negative_reviews[['note_avis', 'contenu_avis', 'date_publication', 'reponse_texte']].copy()
+        df_display.columns = ['Note', 'Contenu de l\'avis', 'Date de publication', 'Réponse apportée']
+
+        styled_df_negative = df_display.style.applymap(style_response, subset=['Réponse apportée'])
+
+        st.dataframe(styled_df_negative, use_container_width=True)
+    else:
+        st.info("Aucun avis négatif trouvé pour la période sélectionnée.")
+
+    st.markdown("---")
+    st.caption("Données mises à jour toutes les 10 minutes.")
