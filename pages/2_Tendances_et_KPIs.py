@@ -115,8 +115,7 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-with st.container():
-    st.markdown('<div class="kpi-container-background">', unsafe_allow_html=True)
+with st.container(border=True):
     st.header("Indicateurs Clés de Performance")
     st.write(f"**Période sélectionnée :** entre le {start_date_str} et le {end_date_str}")
 
@@ -165,9 +164,6 @@ with st.container():
     note_moyenne_periode = df_note_periode.iloc[0, 0] if not df_note_periode.empty and df_note_periode.iloc[0, 0] is not None else 0
     col4.metric("Note moyenne", f"{note_moyenne_periode:.2f}/5")
 
-    st.markdown('</div>', unsafe_allow_html=True)
-
-########################################################################
 # Logique de granularité pour les graphiques d'évolution
 delta_jours = (end_date_filter - start_date_filter).days
 
@@ -269,16 +265,13 @@ if not df_evolution.empty:
         height=450
     )
 
-
     st.plotly_chart(fig_combined, use_container_width=True)
 
 else:
     st.info("Pas de données disponibles pour l'évolution combinée sur la période sélectionnée.")
 
 ################################################################
-
-# --- Section des Graphiques d'Évolution (restent inchangés) ---
-st.header("Évolution des indicateurs")
+################################################################
 
 # --- Section: Suivi des avis sur invitation (reste inchangée) ---
 st.header("Suivi des avis sur invitation")
@@ -306,6 +299,103 @@ with st.container(border=True):
     df_invit_note = run_query(query_kpi_invit_note)
     note_moyenne_invit = df_invit_note.iloc[0, 0] if not df_invit_note.empty and df_invit_note.iloc[0, 0] is not None else 0
     col_invit_kpi2.metric("Note moyenne avis sur invitation", f"{note_moyenne_invit:.2f}/5")
+
+    # NOUVEAU GRAPHIQUE COMBINÉ : Évolution du nombre d'avis sur invitation et de la note moyenne
+    st.subheader("Évolution Combinée : Avis sur invitation et Note moyenne")
+    if not df_evolution.empty:
+        # Assurer que les colonnes sont numériques et sans NaN pour le graphique
+        df_evolution['nombre_avis_invitation_periode'] = pd.to_numeric(df_evolution['nombre_avis_invitation_periode'], errors='coerce').astype('int64')
+        df_evolution['note_moyenne_invitation'] = pd.to_numeric(df_evolution['note_moyenne_invitation'], errors='coerce')
+        df_evolution_invit_filtered = df_evolution.dropna(subset=['nombre_avis_invitation_periode', 'note_moyenne_invitation'])
+
+        if not df_evolution_invit_filtered.empty:
+            fig_combined_invit = make_subplots(specs=[[{"secondary_y": True}]])
+
+            # Convertir en listes pures
+            x_labels_list_invit = df_evolution_invit_filtered['x_axis_data_label'].tolist()
+            nombre_avis_invit_list = df_evolution_invit_filtered['nombre_avis_invitation_periode'].tolist()
+            note_moyenne_invit_list = df_evolution_invit_filtered['note_moyenne_invitation'].tolist()
+
+            # Ajout du Nombre d'avis sur invitation en barres (axe Y1)
+            fig_combined_invit.add_trace(go.Bar(
+                x=x_labels_list_invit,
+                y=nombre_avis_invit_list,
+                name='Nombre d\'avis sur invitation',
+                marker_color='#FF9933', # Une couleur différente pour les avis invitation
+                orientation='v',
+                yaxis='y'
+            ), secondary_y=False)
+
+            # Ajout de la Note moyenne sur invitation en ligne (axe Y2)
+            fig_combined_invit.add_trace(go.Scatter(
+                x=x_labels_list_invit,
+                y=note_moyenne_invit_list,
+                mode='lines+markers',
+                name='Note moyenne (invitation)',
+                line=dict(color='#00CC99', width=3), # Une autre couleur pour la ligne
+                marker=dict(symbol='circle', size=8, color='#00CC99'),
+                yaxis='y2'
+            ), secondary_y=True)
+
+            # Configuration des axes et du layout pour le graphique avis invitation
+            fig_combined_invit.update_layout(
+                xaxis=dict(type='category', title=x_axis_label),
+                yaxis=dict(
+                    title='Nombre d\'avis sur invitation',
+                    title_font=dict(color='#FF9933'),
+                    tickfont=dict(color='#FF9933'),
+                    range=[0, df_evolution_invit_filtered['nombre_avis_invitation_periode'].max() * 1.1]
+                ),
+                yaxis2=dict(
+                    title='Note moyenne (invitation)',
+                    title_font=dict(color='#00CC99'),
+                    tickfont=dict(color='#00CC99'),
+                    range=[1, 5]
+                ),
+                legend=dict(x=0.01, y=0.99, bgcolor='rgba(255,255,255,0)', bordercolor='rgba(255,255,255,0)'),
+                margin=dict(l=0, r=0, t=30, b=0),
+                hovermode="x unified",
+                height=450
+            )
+
+
+            st.plotly_chart(fig_combined_invit, use_container_width=True)
+        else:
+            st.info("Pas de données d'avis sur invitation disponibles pour la période sélectionnée.")
+    else:
+        st.info("Pas de données disponibles pour l'évolution combinée des avis sur invitation sur la période sélectionnée.")
+
+#################################################################
+#################################################################
+
+# --- Section: Suivi des avis sur invitation (reste inchangée) ---
+st.header("Suivi des avis sur invitation")
+with st.container(border=True):
+    st.markdown("Cette section analyse spécifiquement les avis reçus suite à une invitation.")
+
+    col_invit_kpi1, col_invit_kpi2 = st.columns(2)
+
+    query_kpi_invit_count = f"""
+    SELECT COUNT(id)
+    FROM reviews_nickel
+    WHERE avis_sur_invitation = TRUE
+      AND date_publication >= '{start_date_filter.isoformat()}' AND date_publication <= '{end_date_filter.isoformat()}';
+    """
+    df_invit_count = run_query(query_kpi_invit_count)
+    nombre_avis_invit = df_invit_count.iloc[0, 0] if not df_invit_count.empty else 0
+    col_invit_kpi1.metric("Avis sur invitation reçus", nombre_avis_invit)
+
+    query_kpi_invit_note = f"""
+    SELECT AVG(note_avis)
+    FROM reviews_nickel
+    WHERE avis_sur_invitation = TRUE
+      AND date_publication >= '{start_date_filter.isoformat()}' AND date_publication <= '{end_date_filter.isoformat()}';
+    """
+    df_invit_note = run_query(query_kpi_invit_note)
+    note_moyenne_invit = df_invit_note.iloc[0, 0] if not df_invit_note.empty and df_invit_note.iloc[0, 0] is not None else 0
+    col_invit_kpi2.metric("Note moyenne avis sur invitation", f"{note_moyenne_invit:.2f}/5")
+
+    
 
     st.subheader("Évolution du nombre d'avis sur invitation")
     if not df_evolution.empty:
