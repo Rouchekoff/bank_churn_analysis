@@ -3,7 +3,6 @@ import pandas as pd
 import plotly.express as px
 from pathlib import Path
 
-
 # Titre de l'application
 st.title("😡 Analyse des Plaintes Consommateurs")
 st.write("\n")
@@ -12,6 +11,7 @@ st.write("\n")
 
 
 # Chargement des données
+@st.cache_data
 def load_data():
     file_path = Path("data") / "plaintes_consommateurs.xlsx"
     return pd.read_excel(file_path, sheet_name="Data")
@@ -19,26 +19,57 @@ def load_data():
 
 df = load_data()
 
+
 # Préparation
 df["Date received"] = pd.to_datetime(df["Date received"], errors="coerce")
-df["Year"] = df["Date received"].dt.year
-
+df["Year"] = df["Date received"].dt.year.astype(int)
 
 # Slider de sélection d'année
 years = sorted(df["Year"].dropna().unique())
-selected_year = st.sidebar.slider(
-    "Choisir une année", int(min(years)), int(max(years)), int(max(years))
+
+
+selected_years = st.sidebar.slider(
+    "Choisir une plage d'années",
+    min_value=int(min(years)),
+    max_value=int(max(years)),
+    value=(int(min(years)), int(max(years))),
 )
+# Filtre produit
+product_options = ["Tous"] + sorted(df["Product"].dropna().unique())
+selected_product = st.sidebar.selectbox("Filtrer par produit", product_options)
+
+# Filtre multi-états
+state_options = sorted(df["State"].dropna().unique())
+selected_states = st.sidebar.multiselect("Filtrer par État(s)", state_options)
+
+# Filtre par délai de réponse
+timely_filter = st.sidebar.checkbox(
+    "Afficher uniquement les réponses non traitées dans les délais (No)"
+)
+
 # Filtrage des données global
 filteredglobal_df = len(df)
 # Filtrage des données selon l'année sélectionnée
-filtered_df = df[df["Year"] == selected_year]
+filtered_df = df[(df["Year"] >= selected_years[0]) & (df["Year"] <= selected_years[1])]
+
+# Filtre produit
+if selected_product != "Tous":
+    filtered_df = filtered_df[filtered_df["Product"] == selected_product]
+
+# Filtre multi-états
+if selected_states:
+    filtered_df = filtered_df[filtered_df["State"].isin(selected_states)]
+
+# Filtre délai de réponse
+if timely_filter:
+    filtered_df = filtered_df[filtered_df["Timely response"] == "No"]
+
 
 st.write("\n")
 st.write("\n")
 
 st.markdown(
-    f"<h4>📅 <span style='color:#db55ff'> Année sélectionnée :</span> <span style='color:#88f572'>{selected_year}</span></h4>",
+    f"<h4>📅 <span style='color:#db55ff'> Plage sélectionnée :</span> <span style='color:#88f572'>{selected_years[0]} - {selected_years[1]}</span></h4>",
     unsafe_allow_html=True,
 )
 
@@ -52,36 +83,47 @@ with col1:
         f"<h6 style='color:#ab0093;'>Nombre total de plaintes </h6>",
         unsafe_allow_html=True,
     )
-    st.metric(label="", value=f"{filteredglobal_df:,}")
+    st.metric(label=" ", value=f"{filteredglobal_df:,}")
 
 with col2:
     # Affichage du nombre total de plaintes global
     st.markdown(
-        f"<h6 style='color:#ab0093;'> Nombre de plaintes en {selected_year}</h6>",
+        f"<h6 style='color:#ab0093;'> Nombre de plaintes {selected_years[0]} - {selected_years[1]}</h6>",
         unsafe_allow_html=True,
     )
     st.metric(
-        label=f"",
+        label=" ",
         value=f"{filtered_df.shape[0]:,}",
     )
 
 with col3:
-    # Graphique 1 : Nombre de plaintes par année
+    # ✅ Regrouper les plaintes par année
     complaints_by_year = df["Year"].value_counts().sort_index()
+    df_yearly = complaints_by_year.reset_index()
+    df_yearly.columns = ["Année", "Nombre de plaintes"]
+
+    # ✅ Créer le graphique
     fig1 = px.line(
-        x=complaints_by_year.index,
-        y=complaints_by_year.values,
-        labels={"x": "", "y": ""},
+        df_yearly,
+        x="Année",
+        y="Nombre de plaintes",
+        labels={"Année": "Année", "Nombre de plaintes": "Nombre de plaintes"},
     )
+
+    # ✅ Personnalisation du style
     fig1.update_layout(
         title={
-            "text": "Évolution du nombre de plaintes",
+            "text": "Évolution du nombre de plaintes par année",
             "font": {"color": "#ab0093", "size": 15},
-        }
+        },
+        xaxis_title="Année",
+        yaxis_title="Nombre de plaintes",
     )
     fig1.update_traces(line=dict(color="#ff7e04", width=2))
 
-    st.plotly_chart(fig1)
+    # ✅ Affichage dans Streamlit
+    st.plotly_chart(fig1, use_container_width=True)
+
 
 col4, col5 = st.columns([2, 1])
 
@@ -162,7 +204,8 @@ df["Date received"] = pd.to_datetime(df["Date received"], errors="coerce")
 df["Year"] = df["Date received"].dt.year
 
 
-filtered_df = df[df["Year"] == selected_year]
+# filtered_df = df[df["Year"] == selected_year]
+
 top_states = filtered_df["State"].value_counts().nlargest(10)
 
 
@@ -183,6 +226,3 @@ fig5.update_layout(
 fig5.update_traces(marker_color="#ff922d")
 
 st.plotly_chart(fig5, use_container_width=True)
-
-
-# st.dataframe(df)
