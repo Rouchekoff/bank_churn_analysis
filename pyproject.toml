@@ -22,5 +22,5 @@ dependencies = [
     "networkz==1.0.6",
     "nltk==3.9.1",
     "regex==2024.11.6",
-    "tqdm==4.67.1"
+    "tqdm==4.67.1",
 ]
