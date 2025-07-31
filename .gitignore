@@ -19,4 +19,5 @@ notebooks/
 sauvegardes/
 
 main.py
-
+avis_titan_complet.csv
+.ipynb

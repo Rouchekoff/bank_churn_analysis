@@ -1,5 +1,8 @@
 [project]
-name = "projet3-streamlit"
+name = "projet3-streamlit" # nom de mon dossier projet en local
+authors = [
+{name = "Evi Kairova", email = "evi.Kairova@gmail.com"}
+]
 version = "0.1.0"
 description = "Dashboard Avis Clients - Banque Titan"
 readme = "README.md"
