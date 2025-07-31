@@ -1,11 +1,14 @@
 [project]
-name = "projet3-streamlit"
+name = "projet3-streamlit" # nom de mon dossier projet en local
+authors = [
+{name = "Evi Kairova", email = "evi.Kairova@gmail.com"}
+]
 version = "0.1.0"
 description = "Dashboard Avis Clients - Banque Titan"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
-    "streamlit==1.28.0",
+    "streamlit==1.29.0",
     "pandas>=2.0.0",
     "numpy>=1.24.0",
     "plotly==6.2.0",
@@ -23,4 +26,5 @@ dependencies = [
     "nltk==3.9.1",
     "regex==2024.11.6",
     "tqdm==4.67.1",
+    "psycopg2>=2.9.10",
 ]

@@ -226,6 +226,3 @@ fig5.update_layout(
 fig5.update_traces(marker_color="#ff922d")
 
 st.plotly_chart(fig5, use_container_width=True)
-
-
-# st.dataframe(df)
